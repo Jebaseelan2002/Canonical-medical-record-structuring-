@@ -1,0 +1,4 @@
+const API = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:8000' : '');
+export async function processPdf(file) { const fd = new FormData(); fd.append('file', file); const r = await fetch(`${API}/api/records/process`, {method:'POST', body:fd}); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+export async function getRecords(query = '', recordId = '') { const params = new URLSearchParams(); if (query.trim()) params.set('q', query.trim()); if (recordId) params.set('record_id', recordId); params.set('limit', '50'); const r=await fetch(`${API}/api/query/records?${params.toString()}`); if(!r.ok) throw new Error(await r.text()); return r.json(); }
+export async function getRecord(id) { const r=await fetch(`${API}/api/query/records/${id}`); if(!r.ok) throw new Error(await r.text()); return r.json(); }

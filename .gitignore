@@ -1,0 +1,19 @@
+# Python environments, cache, and local application state
+backend/.venv/
+backend/.pytest_cache/
+backend/**/__pycache__/
+backend/.env
+backend/uploads/
+.pytest_cache/
+
+# Node dependencies and generated Vite output
+frontend/node_modules/
+frontend/dist/
+
+# Local database data and Vercel metadata
+mongodb-data/
+.vercel/
+
+# Operating-system files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,31 @@
+services:
+  mongodb:
+    image: mongo:8
+    container_name: canonical-mongodb
+    ports: ["27018:27017"]
+    volumes: ["mongo_data:/data/db"]
+  hapi-fhir:
+    image: hapiproject/hapi:latest
+    container_name: canonical-hapi
+    ports: ["8080:8080"]
+  backend:
+    build: ./backend
+    container_name: canonical-backend
+    ports: ["8000:8000"]
+    env_file: ./backend/.env
+    environment:
+      MONGODB_URL: mongodb://mongodb:27017
+      HAPI_FHIR_URL: http://hapi-fhir:8080/fhir
+    volumes: ["./backend:/app"]
+    depends_on: [mongodb, hapi-fhir]
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+  frontend:
+    image: node:22-alpine
+    container_name: canonical-frontend
+    working_dir: /app
+    ports: ["5173:5173"]
+    volumes: ["./frontend:/app"]
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on: [backend]
+volumes:
+  mongo_data:

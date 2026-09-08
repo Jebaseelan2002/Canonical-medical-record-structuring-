@@ -1,0 +1,1 @@
+export default function Medications({resources=[]}) {const rows=resources.filter(r=>r.resourceType==='MedicationStatement'); return <div className="card"><h2>Medications</h2>{rows.length?rows.map((r,i)=><p key={i}>{r.medicationCodeableConcept?.text} — {r.dosage?.[0]?.text}</p>):<p>None detected.</p>}</div>}

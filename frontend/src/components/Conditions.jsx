@@ -1,0 +1,1 @@
+export default function Conditions({resources=[]}) {const rows=resources.filter(r=>r.resourceType==='Condition'); return <div className="card"><h2>Conditions</h2>{rows.length?rows.map((r,i)=><p key={i}>{r.code?.coding?.[0]?.display||r.code?.text||'Unknown'}</p>):<p>None detected.</p>}</div>}

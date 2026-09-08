@@ -1,0 +1,3 @@
+import {useState} from 'react';
+import {processPdf} from '../services/api';
+export default function UploadForm({onDone}) { const [file,setFile]=useState(null); const [loading,setLoading]=useState(false); const [error,setError]=useState(''); async function submit(e){e.preventDefault(); if(!file)return; setLoading(true);setError('');try{onDone(await processPdf(file))}catch(err){setError(err.message)}finally{setLoading(false)}} return <form onSubmit={submit} className="card"><h2>Upload medical PDF</h2><input type="file" accept="application/pdf,.pdf" onChange={e=>setFile(e.target.files[0])}/><button disabled={!file||loading}>{loading?'Processing...':'Process PDF'}</button>{error&&<p className="error">{error}</p>}</form> }

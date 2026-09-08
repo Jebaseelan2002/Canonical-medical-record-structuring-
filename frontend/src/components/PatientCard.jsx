@@ -1,0 +1,1 @@
+export default function PatientCard({patient}) {return <div className="card"><h2>Patient</h2><p><b>Name:</b> {patient?.name||'Not detected'}</p><p><b>DOB:</b> {patient?.birthDate||'Not detected'}</p><p><b>MRN:</b> {patient?.mrn||'Not detected'}</p><p><b>Gender:</b> {patient?.gender||'Not detected'}</p></div>}
