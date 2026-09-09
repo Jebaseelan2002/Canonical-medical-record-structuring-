@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import uuid
 from bson import ObjectId
 from ..config import settings
-from ..database import save_record
+from ..database import delete_record, save_record
 from ..services.rag import index_record
 from ..services.pdf_processor import process_pdf
 from ..services.classifier import classify
@@ -43,10 +43,9 @@ async def process(file: UploadFile = File(...)):
 
     try:
         vector_backend = await asyncio.to_thread(index_record, record_id, record)
-    except Exception:
-        # The structured record remains available even if the optional RAG index
-        # cannot be created; a later retry can rebuild the vector from raw_pdf_text.
-        vector_backend = "unavailable"
+    except Exception as exc:
+        await asyncio.to_thread(delete_record, record_id)
+        raise HTTPException(503, "Unable to index the raw PDF for RAG search") from exc
 
     return {
         "record_id": record_id,
@@ -61,6 +60,10 @@ async def process(file: UploadFile = File(...)):
 
 
 def _build_record(record_id: str, filename: str, pages: list[dict], raw_pdf_text: str) -> tuple[dict, str]:
+    page_types = [
+        {"page": page["page"], "type": classify(page["text"]), "source": page["source"]}
+        for page in pages
+    ]
     extracted = normalize(extract(pages))
     resources = build_fhir(extracted)
     validation = validate_resources(resources, settings.hapi_fhir_url)
@@ -79,7 +82,7 @@ def _build_record(record_id: str, filename: str, pages: list[dict], raw_pdf_text
         "created_at": datetime.now(timezone.utc).isoformat(),
         "filename": filename,
         "pages": [{"page": p["page"], "text": p["text"], "source": p["source"]} for p in pages],
-        "page_types": [{"page": p["page"], "type": classify(p["text"]), "source": p["source"]} for p in pages],
+        "page_types": page_types,
         "full_text": raw_pdf_text,
         "raw_pdf_text": raw_pdf_text,
         "structured_text": structured_text,

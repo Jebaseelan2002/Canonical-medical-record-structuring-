@@ -1,4 +1,5 @@
 from pymongo import MongoClient
+from bson import ObjectId
 from .config import settings
 
 client = MongoClient(settings.mongodb_url, serverSelectionTimeoutMS=2000)
@@ -40,6 +41,10 @@ def _record_matches_query(record: dict, query: str) -> bool:
 def save_record(record: dict) -> str:
     result = records_collection.insert_one(record)
     return str(result.inserted_id)
+
+
+def delete_record(record_id: str) -> None:
+    records_collection.delete_one({"_id": ObjectId(record_id)})
 
 
 def save_record_vector(record_id: str, text: str, embedding: list[float]) -> None:

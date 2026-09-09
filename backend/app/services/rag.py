@@ -44,8 +44,21 @@ def _local_embedding(text: str) -> list[float]:
     return [value / magnitude for value in vector]
 
 
+def _gemini_embedding(text: str) -> list[float] | None:
+    if not settings.llm_api_key:
+        return None
+    response = httpx.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{settings.embedding_model}:embedContent",
+        params={"key": settings.llm_api_key},
+        json={"model": f"models/{settings.embedding_model}", "content": {"parts": [{"text": text}]}},
+        timeout=settings.llm_timeout_seconds,
+    )
+    response.raise_for_status()
+    return response.json()["embedding"]["values"]
+
+
 def _openai_embedding(text: str) -> list[float] | None:
-    if not settings.llm_api_key or "generativelanguage.googleapis.com" in settings.llm_base_url:
+    if not settings.llm_api_key:
         return None
     response = httpx.post(
         f"{settings.llm_base_url.rstrip('/')}/embeddings",
@@ -59,6 +72,8 @@ def _openai_embedding(text: str) -> list[float] | None:
 
 def embed(text: str) -> list[float]:
     try:
+        if "generativelanguage.googleapis.com" in settings.llm_base_url:
+            return _gemini_embedding(text) or _local_embedding(text)
         return _openai_embedding(text) or _local_embedding(text)
     except (httpx.HTTPError, KeyError, IndexError):
         return _local_embedding(text)
@@ -174,31 +189,6 @@ def _fallback_answer(question: str, matches: list[dict]) -> str:
     asks_about_condition = any(term in question_text for term in ("condition", "diagnosis", "disease")) or any(value.lower() in question_text for value in condition_values)
     asks_about_patient = any(term in question_text for term in ("patient", "name", "who")) or bool(patient_tokens & question_tokens)
 
-    full_text = str(best.get("full_text") or best.get("content") or "").strip()
-    if full_text:
-        segments = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+|\n+", full_text) if segment.strip()]
-        scored_segments = []
-        for segment in segments:
-            segment_tokens = _search_tokens(segment)
-            score = len(question_tokens & segment_tokens)
-            segment_lower = segment.casefold()
-            if asks_about_condition and any(term in segment_lower for term in ("pain", "diagnosis", "history", "condition", "disease", "symptom", "problem", "injury")):
-                score += 8
-            if asks_about_medication and any(term in segment_lower for term in ("medication", "medicine", "prescription", "drug", "take", "taking")):
-                score += 6
-            if asks_about_condition and any(item.casefold() in segment.casefold() for item in condition_values):
-                score += 5
-            if asks_about_medication and any(item.casefold() in segment.casefold() for item in medication_values):
-                score += 5
-            if asks_about_observation and any(term in segment.casefold() for term in observation_terms):
-                score += 5
-            if score > 0:
-                scored_segments.append((score, segment))
-
-        if scored_segments:
-            best_segment = max(scored_segments, key=lambda item: item[0])[1]
-            return best_segment.rstrip(". ") + "."
-
     if asks_about_observation:
         specific_observations = [
             item for item in observation_items
@@ -224,6 +214,32 @@ def _fallback_answer(question: str, matches: list[dict]) -> str:
         return f"Conditions: {conditions}."
     if asks_about_patient:
         return f"Patient: {(patient_name or 'not recorded').rstrip('.')}."
+
+    full_text = str(best.get("full_text") or best.get("content") or "").strip()
+    if full_text:
+        segments = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+|\n+", full_text) if segment.strip()]
+        scored_segments = []
+        for segment in segments:
+            segment_tokens = _search_tokens(segment)
+            score = len(question_tokens & segment_tokens)
+            segment_lower = segment.casefold()
+            if asks_about_condition and any(term in segment_lower for term in ("pain", "diagnosis", "history", "condition", "disease", "symptom", "problem", "injury")):
+                score += 8
+            if asks_about_medication and any(term in segment_lower for term in ("medication", "medicine", "prescription", "drug", "take", "taking")):
+                score += 6
+            if asks_about_condition and any(item.casefold() in segment.casefold() for item in condition_values):
+                score += 5
+            if asks_about_medication and any(item.casefold() in segment.casefold() for item in medication_values):
+                score += 5
+            if asks_about_observation and any(term in segment.casefold() for term in observation_terms):
+                score += 5
+            if score > 0:
+                scored_segments.append((score, segment))
+
+        if scored_segments:
+            best_segment = max(scored_segments, key=lambda item: item[0])[1]
+            return best_segment.rstrip(". ") + "."
+
     return "I found a relevant stored medical record, but it does not contain a direct answer to that question."
 
 
@@ -264,6 +280,20 @@ def _llm_answer(question: str, matches: list[dict]) -> str | None:
     context = "\n\n".join(context_parts)
     if not context:
         return None
+    system_prompt = "Answer only the user's exact question using the supplied medical record context. Be concise and include only directly relevant facts. Do not summarize unrelated fields, add unsolicited advice, or invent clinical facts. If the context does not contain the answer, say so."
+    if "generativelanguage.googleapis.com" in settings.llm_base_url:
+        response = httpx.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{settings.llm_model}:generateContent",
+            params={"key": settings.llm_api_key},
+            json={
+                "systemInstruction": {"parts": [{"text": system_prompt}]},
+                "contents": [{"role": "user", "parts": [{"text": f"Question: {question}\n\nMedical record context:\n{context}"}]}],
+                "generationConfig": {"temperature": 0},
+            },
+            timeout=settings.llm_timeout_seconds,
+        )
+        response.raise_for_status()
+        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
     response = httpx.post(
         f"{settings.llm_base_url.rstrip('/')}/chat/completions",
         headers={"Authorization": f"Bearer {settings.llm_api_key}"},
@@ -271,7 +301,7 @@ def _llm_answer(question: str, matches: list[dict]) -> str | None:
             "model": settings.llm_model,
             "temperature": 0,
             "messages": [
-                {"role": "system", "content": "Answer only the user's exact question using the supplied medical record context. Be concise and include only directly relevant facts. Do not summarize unrelated fields, add unsolicited advice, or invent clinical facts. If the context does not contain the answer, say so."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Question: {question}\n\nMedical record context:\n{context}"},
             ],
         },

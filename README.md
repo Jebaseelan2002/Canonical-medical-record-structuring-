@@ -11,7 +11,7 @@ flowchart TB
 	subgraph BRANCHES[Two parallel branches]
 		direction LR
 		subgraph FHIR_PIPELINE[Structured FHIR Pipeline]
-			direction TB
+				direction LR
 			CLASS[Document Classification] --> EXTRACT[Medical Information Extraction]
 			EXTRACT --> NORMALIZE[Terminology Normalization]
 			NORMALIZE --> FHIR[FHIR Generation + Validation]
@@ -20,7 +20,7 @@ flowchart TB
 		end
 
 		subgraph RAG_PIPELINE[Raw Text RAG Pipeline]
-			direction TB
+			direction LR
 			RAW[Raw Extracted Text] --> EMBED[Chunking / Embedding]
 			EMBED --> VECTOR[(Vector DB)]
 			VECTOR --> RAG[RAG Search]
