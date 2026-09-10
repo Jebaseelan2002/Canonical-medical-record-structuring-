@@ -77,6 +77,16 @@ LLM_TIMEOUT_SECONDS=45
 
 Without `LLM_API_KEY`, the app uses a local deterministic embedding and an extractive fallback answer, so the search workflow remains available for local development.
 
+### Re-index existing records after RAG changes
+
+New uploads are indexed automatically. If records already exist in MongoDB after a RAG/indexing change, rebuild their vectors once:
+
+```bash
+docker compose exec backend python migrate_raw_rag.py
+```
+
+This keeps the raw PDF text and adds the normalized structured fields, including patient identifiers, conditions, medications, and observations, to the searchable projection.
+
 ## Native backend
 Requires MongoDB, Tesseract OCR and Poppler installed locally. In `backend`:
 

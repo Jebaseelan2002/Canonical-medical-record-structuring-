@@ -4,6 +4,7 @@ backend/.pytest_cache/
 backend/**/__pycache__/
 backend/.env
 backend/uploads/
+backend - Copy/
 .pytest_cache/
 
 # Node dependencies and generated Vite output

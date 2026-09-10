@@ -11,6 +11,15 @@ from ..database import get_records_by_ids, list_record_vectors, save_record_vect
 _VECTOR_SIZE = 256
 _LLM_MAX_MATCHES = 1
 _MIN_LEXICAL_SCORE = 0.05
+_QUERY_EXPANSIONS = {
+    "medicine": "medication",
+    "medicines": "medications",
+    "drug": "medication",
+    "drugs": "medications",
+    "diagnoses": "diagnosis",
+    "symptoms": "symptom",
+    "bp": "blood pressure",
+}
 _STOP_WORDS = {
     "a", "about", "an", "and", "are", "can", "does", "for", "how", "i",
     "is", "me", "of", "on", "please", "show", "tell", "the", "to", "what",
@@ -80,7 +89,12 @@ def embed(text: str) -> list[float]:
 
 
 def index_record(record_id: str, record: dict) -> str:
-    text = str(record.get("raw_pdf_text") or record.get("full_text") or "").strip()
+    raw_text = str(record.get("raw_pdf_text") or record.get("full_text") or "").strip()
+    structured_text = str(record.get("structured_text") or "").strip()
+    text = "\n\n".join(part for part in (
+        raw_text,
+        "Structured medical data:\n" + structured_text if structured_text else "",
+    ) if part)
     save_record_vector(record_id, text, embed(text))
     return "mongodb"
 
@@ -99,6 +113,34 @@ def _search_tokens(text: str) -> set[str]:
     }
 
 
+def _expanded_query_tokens(text: str) -> set[str]:
+    tokens = _search_tokens(text)
+    for token in tuple(tokens):
+        expansion = _QUERY_EXPANSIONS.get(token)
+        if expansion:
+            tokens.update(_search_tokens(expansion))
+    return tokens
+
+
+def _normalized_text(text: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _exact_match_score(question: str, document: str, query_tokens: set[str]) -> float:
+    normalized_question = _normalized_text(question)
+    normalized_document = _normalized_text(document)
+    if not normalized_question or not normalized_document:
+        return 0.0
+
+    score = 0.0
+    if len(normalized_question.split()) >= 2 and normalized_question in normalized_document:
+        score += 1.0
+    document_tokens = set(normalized_document.split())
+    if query_tokens and query_tokens <= document_tokens:
+        score += 0.75
+    return score
+
+
 def _lexical_score(query_tokens: set[str], document_tokens: set[str], document_frequency: dict[str, int], document_count: int) -> float:
     if not query_tokens or not document_tokens:
         return 0.0
@@ -114,7 +156,7 @@ def retrieve(question: str, top_k: int | None = None, record_id: str | None = No
     items = list_record_vectors()
     if record_id:
         items = [item for item in items if item.get("record_id") == record_id]
-    query_tokens = _search_tokens(question)
+    query_tokens = _expanded_query_tokens(question)
     document_tokens = [_search_tokens(item.get("text", "")) for item in items]
     document_frequency = {
         token: sum(token in tokens for tokens in document_tokens)
@@ -126,10 +168,11 @@ def retrieve(question: str, top_k: int | None = None, record_id: str | None = No
         lexical_score = _lexical_score(query_tokens, tokens, document_frequency, len(items))
         if query_tokens and lexical_score < _MIN_LEXICAL_SCORE:
             continue
+        exact_score = _exact_match_score(question, item.get("text", ""), query_tokens)
         ranked.append({
             "record_id": item["record_id"],
             "text": item.get("text", ""),
-            "score": lexical_score + max(semantic_score, 0.0) * 0.15,
+            "score": lexical_score * 0.7 + exact_score * 0.2 + max(semantic_score, 0.0) * 0.1,
         })
     ranked.sort(key=lambda item: item["score"], reverse=True)
     selected = ranked[: top_k if top_k is not None else settings.rag_top_k]
@@ -246,8 +289,10 @@ def _fallback_answer(question: str, matches: list[dict]) -> str:
 def _context_excerpt(question: str, match: dict) -> str:
     record = match["record"]
     full_text = str(record.get("full_text") or "").strip()
+    structured_text = str(record.get("structured_text") or "").strip()
+    structured_context = f"Structured medical data:\n{structured_text}" if structured_text else ""
     if not full_text:
-        return ""
+        return structured_context[:2500]
     question_tokens = _search_tokens(question)
     segments = [segment.strip() for segment in re.split(r"(?<=[.!?])\s+|\n+", full_text) if segment.strip()]
     ranked_segments = sorted(
@@ -266,7 +311,10 @@ def _context_excerpt(question: str, match: dict) -> str:
         total_length += len(segment)
         if total_length >= 2000:
             break
-    return "\n".join(selected) or full_text[:2500]
+    excerpt = "\n".join(selected) or full_text[:2500]
+    if structured_context:
+        excerpt = f"{structured_context}\n\n{excerpt}"
+    return excerpt[:4000]
 
 
 def _llm_answer(question: str, matches: list[dict]) -> str | None:
@@ -314,11 +362,21 @@ def _llm_answer(question: str, matches: list[dict]) -> str | None:
 def answer_question(question: str, record_id: str | None = None) -> dict:
     matches = retrieve(question, record_id=record_id)
     llm_error = None
-    try:
-        answer = _llm_answer(question, matches)
-    except (httpx.HTTPError, KeyError, IndexError) as error:
-        answer = None
-        llm_error = str(error)
+    answer = None
+    llm_used = False
+    if matches:
+        deterministic_answer = _fallback_answer(question, matches)
+        if not deterministic_answer.startswith((
+            "I could not find a stored medical record",
+            "I found a relevant stored medical record",
+        )):
+            answer = deterministic_answer
+    if answer is None:
+        try:
+            answer = _llm_answer(question, matches)
+            llm_used = bool(answer)
+        except (httpx.HTTPError, KeyError, IndexError) as error:
+            llm_error = str(error)
     return {
         "answer": answer or _fallback_answer(question, matches),
         "sources": [
@@ -329,6 +387,6 @@ def answer_question(question: str, record_id: str | None = None) -> dict:
             for item in matches
         ],
         "retrieved": len(matches),
-        "llm_used": bool(answer),
+        "llm_used": llm_used,
         "llm_error": llm_error,
     }

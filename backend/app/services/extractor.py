@@ -51,13 +51,33 @@ def _extract_dob(text):
 
 
 def _extract_mrn(text):
-    return first([r"(?i)\b(?:mrn|medical record(?: number)?|medical record #)\b\s*[:#\-]?\s*([A-Za-z0-9-]+)", r"(?i)\b(?:account\s*/\s*encounter|encounter)\b\s*[:\-]?\s*([A-Za-z0-9-]+)"], text)
+    value = first([
+        r"(?im)^\s*(?:mrn|medical record number|medical record #)\s*[:#\-]?\s*(?:\n\s*)?([A-Za-z0-9][A-Za-z0-9-]*)\b",
+        r"(?i)\b(?:account\s*/\s*encounter|encounter)\b\s*[:\-]?\s*([A-Za-z0-9-]+)",
+    ], text)
+    return value
 
 
 def _extract_gender(text):
     gender = first([r"(?i)\b(?:gender|sex)\b\s*[:\-]?\s*(male|female|other|unknown)"], text)
     if gender:
         return gender.title()
+    return None
+
+
+def _extract_patient_name(text):
+    patterns = [
+        r"(?im)^\s*(?:patient\s+name|full\s+name)\s*[:\-]\s*([^\r\n]+)",
+        r"(?im)^\s*(?:patient\s+name|full\s+name)\s*$\s*\n\s*([^\r\n]+)",
+    ]
+    invalid_markers = ("record generated", "medical-document extraction", "synthetic medical record")
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if not match:
+            continue
+        value = _normalize_space(match.group(1))
+        if value and not any(marker in value.casefold() for marker in invalid_markers):
+            return re.sub(r"\s*\(fictional\)\s*$", "", value, flags=re.I).strip()
     return None
 
 
@@ -150,11 +170,11 @@ def extract(pages):
     full = "\n".join(p["text"] for p in pages)
     compact = _normalize_space(full)
 
-    patient_name = _extract_named_value(compact, ["Patient Name", "Patient", "Name"], stop_labels=["Date of Birth", "DOB", "MRN", "Sex", "Gender", "Date of Service", "MRN"]) or "Unknown"
+    patient_name = _extract_patient_name(full) or "Unknown"
     patient = {
         "name": patient_name,
         "birthDate": _extract_dob(compact),
-        "mrn": _extract_mrn(compact),
+        "mrn": _extract_mrn(full),
         "gender": _extract_gender(compact),
     }
 
